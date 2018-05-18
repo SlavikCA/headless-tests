@@ -1,0 +1,78 @@
+group 'slavik'
+version '1.0'
+
+apply plugin: 'groovy'
+apply plugin: 'java'
+apply plugin: 'application'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compile 'org.codehaus.groovy:groovy-all:2.3.11'
+    compile 'org.testng:testng:6.14.+'
+    // compile 'com.github.tomakehurst:wiremock:2.17.+'
+    compile 'io.github.bonigarcia:webdrivermanager:2.2.+'
+    compile 'org.seleniumhq.selenium:selenium-java:3.12.+'
+    compile 'org.seleniumhq.selenium:selenium-api:3.12.+'
+    compile 'org.seleniumhq.selenium:selenium-chrome-driver:3.12.+'
+}
+
+// qaServer is where tests will be uploaded via rsync and executed
+// it is assumed, that machine, where these gradle tasks executed has setup with SSH keys login to qaServer
+def qaServer = 'cent.slavikf.com'
+def qaServerSSHport = '2221'
+def username = 'slavik'
+
+mainClassName = "org.testng.TestNG"
+
+task deploy {
+    dependsOn installDist
+
+    String cmd = "./sync.sh"
+    def sout = new StringBuilder(), serr = new StringBuilder()
+    def proc = cmd.execute()
+    proc.consumeProcessOutput(sout, serr)
+    proc.waitForOrKill(1000 * 60 * 50)  // 50 minutes to execute
+    println "out> $sout \nerr> $serr"
+}
+
+task testSelection {
+    dependsOn deploy
+
+    def jarName = "${rootProject.name}-${version}.jar"
+    def webFolder = "/var/www/html/results"
+    def webUrl = "http://$qaServer/results"
+    def timeStampPath = "${rootProject.name}-${new Date().format('yyyy-MM-dd_HH-mm')}"
+
+    doLast {
+        if (!rootProject.hasProperty('tests'))
+            println """**** 'tests' property required for 'testSelection' task! For example:
+ -Ptests="-testjar lib/${rootProject.name}-${version}.jar"
+ -Ptests="-testclass SimpleTest"
+ -Ptests="-methods SimpleTest.titleOfPage"
+If you add Gradle task in IntelliJ - double quotes shall be used, just like in examples above."""
+        else {
+            String cmd = "ssh -p $qaServerSSHport $username@$qaServer" +
+                    " cd ${rootProject.name}; mkdir $webFolder/$timeStampPath;" +
+                    " java -cp 'conf/:lib/$jarName:lib/*'" +
+                    ' org.testng.TestNG' +
+                    " -d $webFolder/$timeStampPath $tests" +
+                    " &> $webFolder/$timeStampPath/log.txt"
+            println cmd
+            def sout = new StringBuilder(), serr = new StringBuilder()
+            def proc = cmd.execute()
+            proc.consumeProcessOutput(sout, serr)
+            proc.waitForOrKill(1000 * 60 * 50)  // 50 minutes to execute tests
+            println "out> $sout \nerr> $serr"
+
+            // opening results locally
+            "open $webUrl/$timeStampPath/log.txt".execute()
+            "open $webUrl/$timeStampPath/emailable-report.html".execute()
+        }
+    }
+}
+
